@@ -7,6 +7,10 @@ export default {
   ],
   theme: {
     extend: {
+      colors: {
+        'canvas': '#E8EDF3',
+        'deep-charcoal': '#1A202C',
+      },
       fontFamily: {
         'sans': ['Inter', 'system-ui', 'sans-serif'],
         'display': ['Space Grotesk', 'system-ui', 'sans-serif'],
