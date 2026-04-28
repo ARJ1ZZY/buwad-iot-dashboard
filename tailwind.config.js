@@ -21,6 +21,9 @@ export default {
       borderRadius: {
         '2xl': '1rem',
       },
+      transitionDuration: {
+        'theme': '150ms',
+      },
     },
   },
   plugins: [],
