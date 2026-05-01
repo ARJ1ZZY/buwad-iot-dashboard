@@ -2,19 +2,33 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
+const Controls = ({ 
+  dryingMode, 
+  flipMode, 
+  onDryingModeToggle, 
+  onFlipModeToggle, 
+  onManualOverride,
+  t 
+}) => {
   const [isManualFliping, setIsManualFliping] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
-  const [localMode, setLocalMode] = useState(dryingMode || 'danggit');
+  const [localDryingMode, setLocalDryingMode] = useState(dryingMode || 'danggit');
+  const [localFlipMode, setLocalFlipMode] = useState(flipMode || 'timer');
   const lastClickTimeRef = useRef(0);
   const toastTimeoutRef = useRef(null);
 
   useEffect(() => {
-    if (dryingMode && dryingMode !== localMode) {
-      setLocalMode(dryingMode);
+    if (dryingMode && dryingMode !== localDryingMode) {
+      setLocalDryingMode(dryingMode);
     }
   }, [dryingMode]);
+
+  useEffect(() => {
+    if (flipMode && flipMode !== localFlipMode) {
+      setLocalFlipMode(flipMode);
+    }
+  }, [flipMode]);
 
   useEffect(() => {
     return () => {
@@ -36,12 +50,19 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
     }, 1800);
   }, []);
 
-  const handleModeSelect = useCallback((mode) => {
-    if (mode === localMode) return;
-    setLocalMode(mode);
+  const handleDryingSelect = useCallback((mode) => {
+    if (mode === localDryingMode) return;
+    setLocalDryingMode(mode);
     onDryingModeToggle?.(mode);
     triggerToast(`Switched to ${mode === 'danggit' ? 'Danggit' : 'Bolinao'}`);
-  }, [localMode, onDryingModeToggle, triggerToast]);
+  }, [localDryingMode, onDryingModeToggle, triggerToast]);
+
+  const handleFlipModeSelect = useCallback((mode) => {
+    if (mode === localFlipMode) return;
+    setLocalFlipMode(mode);
+    onFlipModeToggle?.(mode);
+    triggerToast(`Switched to ${mode === 'environment' ? 'Environment-Based' : 'Timer-Based'} flipping`);
+  }, [localFlipMode, onFlipModeToggle, triggerToast]);
 
   const handleManualFlip = useCallback(() => {
     const now = Date.now();
@@ -62,7 +83,15 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
     }, 800);
   }, [onManualOverride, triggerToast]);
 
-  const isDanggit = localMode === 'danggit';
+  const isDanggit = localDryingMode === 'danggit';
+  const isEnvironment = localFlipMode === 'environment';
+
+  const getCycleDisplay = () => {
+    if (isEnvironment) {
+      return 'Adaptive';
+    }
+    return isDanggit ? '38s' : '22s';
+  };
 
   const toastPortal = createPortal(
     <AnimatePresence>
@@ -136,7 +165,7 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
 
               <button
                 type="button"
-                onClick={() => handleModeSelect('danggit')}
+                onClick={() => handleDryingSelect('danggit')}
                 className={`relative z-10 flex-1 flex flex-col items-center justify-center py-4 px-3 rounded-[10px] transition-colors duration-500 ${
                   isDanggit 
                     ? 'text-white' 
@@ -153,7 +182,7 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
 
               <button
                 type="button"
-                onClick={() => handleModeSelect('bolinao')}
+                onClick={() => handleDryingSelect('bolinao')}
                 className={`relative z-10 flex-1 flex flex-col items-center justify-center py-4 px-3 rounded-[10px] transition-colors duration-500 ${
                   !isDanggit 
                     ? 'text-white' 
@@ -169,24 +198,74 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
               </button>
             </div>
           </div>
+        </div>
 
-          <div className="px-5 pb-5">
-            <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 dark:bg-white/5 transition-colors duration-500">
-              <div className="w-8 h-8 rounded-lg bg-[#00386D]/10 dark:bg-[#6699CC]/10 flex items-center justify-center flex-shrink-0 transition-colors duration-500">
-                <svg className="w-4 h-4 text-[#00386D] dark:text-[#6699CC] transition-colors duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+        {/* Flipping Mode Section */}
+        <div className="rounded-2xl border border-[#BDBCBD] dark:border-white/10 bg-white dark:bg-[#1A202C]/80 overflow-hidden transition-colors duration-500">
+          <div className="px-5 pt-5 pb-3">
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] transition-colors duration-500">
+                {t('flippingMode')}
               </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-[10px] font-black text-[#00386D] dark:text-[#F7FAFC] tracking-tight transition-colors duration-500">
-                  {isDanggit ? 'Thick Fillet Profile' : 'Small Mass Profile'}
-                </div>
-                <div className="text-[9px] font-medium text-[#4A5568] dark:text-[#94A3B8] mt-0.5 transition-colors duration-500">
-                  {isDanggit 
-                    ? 'Optimized for rabbitfish · Slower flip cycle · Extended drying duration' 
-                    : 'Optimized for anchovies · Faster flip cycle · Quick drying pattern'}
-                </div>
+              <div className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-500 ${isEnvironment ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className={`text-[9px] font-bold tracking-wider transition-colors duration-500 ${isEnvironment ? 'text-emerald-500' : 'text-amber-500'}`}>
+                  {isEnvironment ? 'SENSOR-DRIVEN' : 'FIXED INTERVAL'}
+                </span>
               </div>
+            </div>
+          </div>
+
+          <div className="px-3 pb-5">
+            <div className="relative flex bg-gray-100 dark:bg-white/5 rounded-xl p-1 min-h-[64px] overflow-hidden transition-colors duration-500">
+              <motion.div
+                layoutId="flipModePill"
+                className="absolute top-1 bottom-1 bg-[#00386D] dark:bg-[#6699CC] rounded-[10px] shadow-lg transition-colors duration-500"
+                style={{ 
+                  width: 'calc(50% - 4px)',
+                  left: isEnvironment ? '4px' : '50%'
+                }}
+                transition={{
+                  type: 'spring',
+                  stiffness: 380,
+                  damping: 28,
+                  mass: 0.8,
+                }}
+              />
+
+              <button
+                type="button"
+                onClick={() => handleFlipModeSelect('environment')}
+                className={`relative z-10 flex-1 flex flex-col items-center justify-center py-4 px-2 rounded-[10px] transition-colors duration-500 ${
+                  isEnvironment 
+                    ? 'text-white' 
+                    : 'text-[#00386D] dark:text-[#94A3B8] hover:text-[#00386D] dark:hover:text-[#F7FAFC]'
+                }`}
+              >
+                <span className="text-xs font-black tracking-wide leading-tight text-center">
+                  {t('environmentBased')}
+                </span>
+                <span className="text-[8px] font-medium mt-0.5 opacity-80 text-center">
+                  Sensor-driven
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleFlipModeSelect('timer')}
+                className={`relative z-10 flex-1 flex flex-col items-center justify-center py-4 px-2 rounded-[10px] transition-colors duration-500 ${
+                  !isEnvironment 
+                    ? 'text-white' 
+                    : 'text-[#00386D] dark:text-[#94A3B8] hover:text-[#00386D] dark:hover:text-[#F7FAFC]'
+                }`}
+              >
+                <span className="text-xs font-black tracking-wide leading-tight text-center">
+                  {t('timerBased')}
+                </span>
+                <span className="text-[8px] font-medium mt-0.5 opacity-80 text-center">
+                  Fixed cycle
+                </span>
+              </button>
             </div>
           </div>
         </div>
@@ -244,7 +323,7 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
           <div className="px-5 pb-5">
             <div className="text-center">
               <div className="text-[9px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.05em] transition-colors duration-500">
-                Instant manual flip · 2 second cooldown between triggers
+                {t('triggersImmediateFlip')}
               </div>
             </div>
           </div>
@@ -252,28 +331,39 @@ const Controls = ({ dryingMode, onDryingModeToggle, onManualOverride, t }) => {
 
         {/* Quick Status Card */}
         <div className="rounded-2xl border border-[#BDBCBD] dark:border-white/10 bg-white dark:bg-[#1A202C]/80 p-5 transition-colors duration-500">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-3 gap-3">
             <div className="text-center">
-              <div className="text-[9px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] mb-2 transition-colors duration-500">
-                ACTIVE PROFILE
+              <div className="text-[8px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] mb-1.5 transition-colors duration-500">
+                PROFILE
               </div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#00386D]/10 dark:bg-[#6699CC]/10 transition-colors duration-500">
-                <span className={`w-2 h-2 rounded-full transition-colors duration-500 ${isDanggit ? 'bg-[#00386D] dark:bg-[#6699CC]' : 'bg-emerald-500'}`} />
-                <span className="text-sm font-black text-[#00386D] dark:text-[#F7FAFC] transition-colors duration-500">
+              <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#00386D]/10 dark:bg-[#6699CC]/10 transition-colors duration-500">
+                <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-500 ${isDanggit ? 'bg-[#00386D] dark:bg-[#6699CC]' : 'bg-emerald-500'}`} />
+                <span className="text-[10px] font-black text-[#00386D] dark:text-[#F7FAFC] transition-colors duration-500">
                   {isDanggit ? 'DANGGIT' : 'BOLINAO'}
                 </span>
               </div>
             </div>
             <div className="text-center">
-              <div className="text-[9px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] mb-2 transition-colors duration-500">
+              <div className="text-[8px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] mb-1.5 transition-colors duration-500">
+                MODE
+              </div>
+              <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-white/5 transition-colors duration-500">
+                <span className={`w-1.5 h-1.5 rounded-full transition-colors duration-500 ${isEnvironment ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className="text-[10px] font-black text-[#00386D] dark:text-[#F7FAFC] transition-colors duration-500">
+                  {isEnvironment ? 'ENV' : 'TIMER'}
+                </span>
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-[8px] font-bold text-[#4A5568] dark:text-[#94A3B8] tracking-[0.1em] mb-1.5 transition-colors duration-500">
                 CYCLE
               </div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-white/5 transition-colors duration-500">
-                <svg className="w-3.5 h-3.5 text-[#4A5568] dark:text-[#94A3B8] transition-colors duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-white/5 transition-colors duration-500">
+                <svg className="w-3 h-3 text-[#4A5568] dark:text-[#94A3B8] transition-colors duration-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span className="text-sm font-black text-[#00386D] dark:text-[#F7FAFC] transition-colors duration-500">
-                  {isDanggit ? '38s' : '22s'}
+                <span className="text-[10px] font-black text-[#00386D] dark:text-[#F7FAFC] transition-colors duration-500">
+                  {getCycleDisplay()}
                 </span>
               </div>
             </div>

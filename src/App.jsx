@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
-import { getDatabase, ref, onValue, update, push, query, orderByKey, limitToLast } from 'firebase/database';
+import { getDatabase, ref, onValue, update, push, remove, query, orderByKey, limitToLast } from 'firebase/database';
 import { initializeApp } from 'firebase/app';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
 import WelcomeScreen from './views/WelcomeScreen';
@@ -9,6 +9,15 @@ import Dashboard from './views/Dashboard';
 import Controls from './views/Controls';
 import Alerts from './views/Alerts';
 import Logs from './views/Logs';
+import { 
+  isNotificationSupported, 
+  requestNotificationPermission, 
+  initializeFCM, 
+  listenForForegroundMessages, 
+  setupNotificationTriggers,
+  areNotificationsEnabled,
+  getBrowserUnsupportedMessage
+} from './utils/notifications';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -31,14 +40,15 @@ function AppContent() {
   const [isDarkMode, setIsDarkMode] = useState(() => {
     const savedTheme = localStorage.getItem('buwad_theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const isDark = savedTheme === 'dark' || (!savedTheme && prefersDark);
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-    }
-    return isDark;
+    return savedTheme === 'dark' || (!savedTheme && prefersDark);
   });
   const [isSystemPoweredOn, setIsSystemPoweredOn] = useState(true);
   const [hasRealData, setHasRealData] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationsSupported, setNotificationsSupported] = useState(false);
+  const [notificationMessage, setNotificationMessage] = useState(null);
+  const [fcmToken, setFcmToken] = useState(null);
+  const [messagingInstance, setMessagingInstance] = useState(null);
   const { t, resetLanguage } = useLanguage();
   const [sensorData, setSensorData] = useState({
     temperature: 32.4,
@@ -52,20 +62,24 @@ function AppContent() {
     nextFlip: 0,
     isPaused: false,
     manualOverride: false,
-    dryingMode: 'danggit'
+    dryingMode: 'danggit',
+    flipMode: 'timer'
   });
   
   const [alerts, setAlerts] = useState([]);
   const [activityLogs, setActivityLogs] = useState([]);
-  const [logsLoaded, setLogsLoaded] = useState(false);
   const [toast, setToast] = useState(null);
   
   const isManualProcessingRef = useRef(false);
   const manualFlipTimeoutRef = useRef(null);
   const lastLocalDryingModeRef = useRef('danggit');
+  const lastLocalFlipModeRef = useRef('timer');
   const lastLocalManualOverrideRef = useRef(false);
   const ignoreNextSystemUpdateRef = useRef(false);
   const localLogIdsRef = useRef(new Set());
+  const foregroundUnsubscribeRef = useRef(null);
+  const triggersCleanupRef = useRef(null);
+  const logsLoadedRef = useRef(false);
 
   const formatToStandardTime = useCallback((timestamp) => {
     if (!timestamp) return '--:-- --';
@@ -112,6 +126,68 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
+    const supported = isNotificationSupported();
+    setNotificationsSupported(supported);
+    if (!supported) {
+      setNotificationMessage(getBrowserUnsupportedMessage());
+    }
+  }, []);
+
+  useEffect(() => {
+    if (stage === 'dashboard' && notificationsSupported && areNotificationsEnabled() && !notificationsEnabled) {
+      const initNotifications = async () => {
+        const result = await initializeFCM(app, database, firebaseConfig);
+        if (result) {
+          setFcmToken(result.token);
+          setMessagingInstance(result.messaging);
+          setNotificationsEnabled(true);
+        }
+      };
+      
+      initNotifications();
+    }
+  }, [stage, notificationsSupported, notificationsEnabled]);
+
+  useEffect(() => {
+    if (messagingInstance) {
+      foregroundUnsubscribeRef.current = listenForForegroundMessages(
+        messagingInstance, 
+        (payload) => {
+          const title = payload.notification?.title || 'BUWAD Alert';
+          const body = payload.notification?.body || '';
+          showToast(`${title}: ${body}`, 'info');
+        }
+      );
+    }
+    
+    return () => {
+      if (foregroundUnsubscribeRef.current) {
+        foregroundUnsubscribeRef.current();
+      }
+    };
+  }, [messagingInstance]);
+
+  useEffect(() => {
+    if (notificationsEnabled && database) {
+      triggersCleanupRef.current = setupNotificationTriggers(database);
+    }
+    
+    return () => {
+      if (triggersCleanupRef.current) {
+        triggersCleanupRef.current();
+      }
+    };
+  }, [notificationsEnabled]);
+
+  useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/service-worker.js')
+        .then(() => console.log('App Service Worker registered'))
+        .catch((error) => console.error('Service Worker registration failed:', error));
+    }
+  }, []);
+
+  useEffect(() => {
     const savedPreference = localStorage.getItem('buwad_save_language');
     if (savedPreference === 'true') {
       setStage('dashboard');
@@ -134,6 +210,11 @@ function AppContent() {
 
   const handleSystemPowerToggle = useCallback((newState) => {
     setIsSystemPoweredOn(newState);
+  }, []);
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 2000);
   }, []);
 
   const addLogEntry = useCallback((logEntry) => {
@@ -222,6 +303,61 @@ function AppContent() {
     
   }, [addLogEntry, syncSystemToFirebase]);
 
+  const handleFlipModeToggle = useCallback((mode) => {
+    if (mode === lastLocalFlipModeRef.current) return;
+    
+    const previousMode = lastLocalFlipModeRef.current;
+    lastLocalFlipModeRef.current = mode;
+    
+    setSystemState(prev => ({ ...prev, flipMode: mode }));
+    
+    addLogEntry({ 
+      action: 'FLIP MODE CHANGED', 
+      details: `Flipping mode switched from ${previousMode === 'environment' ? 'Environment-Based' : 'Timer-Based'} to ${mode === 'environment' ? 'Environment-Based' : 'Timer-Based'}`,
+      sensorValues: { 
+        mode: mode === 'environment' ? 'Environment' : 'Timer',
+        trigger: mode === 'environment' ? 'Sensor-driven' : 'Fixed interval'
+      }
+    });
+    
+    syncSystemToFirebase({ flipMode: mode });
+    
+  }, [addLogEntry, syncSystemToFirebase]);
+
+  const handleToggleNotifications = useCallback(async () => {
+    if (notificationsEnabled) {
+      if (fcmToken && database) {
+        try {
+          const tokenRef = ref(database, `fcmTokens/${fcmToken}`);
+          await remove(tokenRef);
+        } catch (error) {
+          console.error('Error removing FCM token:', error);
+        }
+      }
+      setNotificationsEnabled(false);
+      setFcmToken(null);
+      setMessagingInstance(null);
+      showToast('Notifications disabled');
+    } else {
+      const permissionResult = await requestNotificationPermission();
+      if (permissionResult.granted) {
+        const fcmResult = await initializeFCM(app, database, firebaseConfig);
+        if (fcmResult) {
+          setFcmToken(fcmResult.token);
+          setMessagingInstance(fcmResult.messaging);
+          setNotificationsEnabled(true);
+          showToast('Notifications enabled');
+        } else {
+          showToast('Failed to initialize notifications', 'error');
+        }
+      } else if (permissionResult.permission === 'denied') {
+        showToast('Notification permission was denied. Enable in browser settings.', 'error');
+      } else {
+        showToast('Notification permission dismissed', 'error');
+      }
+    }
+  }, [notificationsEnabled, fcmToken, showToast]);
+
   useEffect(() => {
     if (!database) return;
 
@@ -274,6 +410,9 @@ function AppContent() {
         if (data.dryingMode && data.dryingMode !== lastLocalDryingModeRef.current && data.dryingMode !== prev.dryingMode) {
           updates.dryingMode = data.dryingMode;
         }
+        if (data.flipMode && data.flipMode !== lastLocalFlipModeRef.current && data.flipMode !== prev.flipMode) {
+          updates.flipMode = data.flipMode;
+        }
         if (data.manualOverride !== undefined && !lastLocalManualOverrideRef.current && data.manualOverride !== prev.manualOverride) {
           updates.manualOverride = data.manualOverride;
         }
@@ -299,7 +438,7 @@ function AppContent() {
     
     const unsubscribeLogs = onValue(logsQuery, (snapshot) => {
       const data = snapshot.val();
-      if (data && !logsLoaded) {
+      if (data && !logsLoadedRef.current) {
         const firebaseLogs = Object.values(data)
           .filter(log => log && log.action && !localLogIdsRef.current.has(log.id))
           .map(log => ({
@@ -318,7 +457,7 @@ function AppContent() {
           setActivityLogs(prev => {
             const existingIds = new Set(prev.map(l => l.id));
             const newLogs = firebaseLogs.filter(l => !existingIds.has(l.id));
-            const merged = [...prev, ...newLogs];
+            const merged = [...newLogs, ...prev];
             merged.sort((a, b) => {
               const timeA = a.timestamp || '00:00';
               const timeB = b.timestamp || '00:00';
@@ -327,7 +466,7 @@ function AppContent() {
             return merged.slice(0, MAX_LOCAL_LOGS);
           });
         }
-        setLogsLoaded(true);
+        logsLoadedRef.current = true;
       }
     }, { onlyOnce: false });
     
@@ -336,8 +475,14 @@ function AppContent() {
       unsubscribeSystem();
       unsubscribeAlerts();
       unsubscribeLogs();
+      if (triggersCleanupRef.current) {
+        triggersCleanupRef.current();
+      }
+      if (foregroundUnsubscribeRef.current) {
+        foregroundUnsubscribeRef.current();
+      }
     };
-  }, [logsLoaded, formatToStandardTime]);
+  }, [formatToStandardTime]);
 
   const getSunlightLabel = () => {
     if (sensorData.sunlight > 70) return 'INTENSE';
@@ -372,7 +517,31 @@ function AppContent() {
           />
         </div>
         
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
+          {notificationsSupported && (
+            <motion.button
+              type="button"
+              onClick={handleToggleNotifications}
+              whileTap={{ scale: 0.95 }}
+              className={`p-2 rounded-xl transition-colors duration-500 ${
+                notificationsEnabled 
+                  ? 'text-green-500 hover:bg-green-500/10' 
+                  : 'text-red-500 hover:bg-red-500/10'
+              }`}
+              title={notificationsEnabled ? 'Notifications enabled - Click to disable' : 'Notifications disabled - Click to enable'}
+            >
+              {notificationsEnabled ? (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+              ) : (
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.73 21a2 2 0 01-3.46 0M18 8.27A6.47 6.47 0 0012 3a6.47 6.47 0 00-6 5.27M12 3v0M18 8.27l1.23 1.64A2 2 0 0117.5 13H6.5a2 2 0 01-1.72-3.09L6 8.27M8 17h8M3 3l18 18" />
+                </svg>
+              )}
+            </motion.button>
+          )}
+          
           <motion.button
             type="button"
             onClick={() => {
@@ -426,6 +595,15 @@ function AppContent() {
     <div className="min-h-screen bg-transparent">
       <div className="max-w-md mx-auto min-h-screen flex flex-col pb-24 bg-transparent">
         <DashboardHeader />
+        {notificationMessage && (
+          <div className="px-5 pt-2">
+            <div className="rounded-xl border border-blue-500/50 bg-blue-500/10 dark:bg-blue-500/20 px-3 py-2">
+              <div className="text-[10px] font-medium text-blue-600 dark:text-blue-400">
+                {notificationMessage}
+              </div>
+            </div>
+          </div>
+        )}
         <AnimatePresence>
           {toast && (
             <motion.div
@@ -441,6 +619,23 @@ function AppContent() {
           )}
         </AnimatePresence>
         <div className="flex-1 px-5 py-6">
+          {!hasRealData && (
+            <div className="rounded-xl border border-amber-500/50 bg-amber-500/10 dark:bg-amber-500/20 px-4 py-2 mb-4 transition-colors duration-500">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                </svg>
+                <div>
+                  <div className="text-[11px] font-black text-amber-600 dark:text-amber-400">
+                    DEMO MODE
+                  </div>
+                  <div className="text-[9px] font-medium text-amber-600/70 dark:text-amber-400/70">
+                    No sensor data available · Displaying sample values
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
@@ -463,8 +658,10 @@ function AppContent() {
               {activeTab === 'controls' && (
                 <Controls 
                   dryingMode={systemState.dryingMode}
-                  onDryingModeToggle={handleDryingModeToggle} 
-                  onManualOverride={handleManualOverride} 
+                  flipMode={systemState.flipMode}
+                  onDryingModeToggle={handleDryingModeToggle}
+                  onFlipModeToggle={handleFlipModeToggle}
+                  onManualOverride={handleManualOverride}
                   t={t}
                 />
               )}

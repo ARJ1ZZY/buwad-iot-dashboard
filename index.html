@@ -7,11 +7,20 @@
     <meta name="theme-color" content="#00386D" />
     <title>BUWAD · Solar Fish Drying System</title>
     
-    <!-- Preconnect for faster font loading -->
+    <!-- Blocking script to prevent dark mode flash -->
+    <script>
+      (function() {
+        try {
+          var theme = localStorage.getItem('buwad_theme');
+          if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (e) {}
+      })();
+    </script>
+    
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    
-    <!-- Load fonts asynchronously (non-blocking) -->
     <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
     <noscript>
       <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800;900&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
